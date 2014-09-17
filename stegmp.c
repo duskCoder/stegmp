@@ -151,8 +151,8 @@ static int stegmp(const char *bmp_file, FILE *input)
     }
 
     fstat(fileno(fh), &stat);
-    addr = mmap(NULL, stat.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE,
-            fileno(fh), 0);
+    addr = mmap(NULL, stat.st_size, PROT_READ | ((input) ? PROT_WRITE : 0),
+            MAP_PRIVATE, fileno(fh), 0);
 
     if (addr == MAP_FAILED) {
         fprintf(stderr, "%s: %m\n", bmp_file);
