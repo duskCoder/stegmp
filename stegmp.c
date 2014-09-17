@@ -21,7 +21,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <sysexits.h>
+
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 #include "bmp.h"
@@ -132,15 +135,18 @@ static int stegmp_parse_headers(const unsigned char *addr, size_t orig_size,
     return 0;
 }
 
-static int stegmp(const char *filename)
+/*
+ * if `input' is NULL, we, want to read bmp_file
+ */
+static int stegmp(const char *bmp_file, FILE *input)
 {
     void *addr;
     struct stat stat;
     struct bitmap bmp;
-    FILE *fh = fopen(filename, "r+");
+    FILE *fh = fopen(bmp_file, "r+");
 
     if (fh == NULL) {
-        fprintf(stderr, "%s: %m\n", filename);
+        fprintf(stderr, "%s: %m\n", bmp_file);
         return -1;
     }
 
@@ -149,14 +155,15 @@ static int stegmp(const char *filename)
             fileno(fh), 0);
 
     if (addr == MAP_FAILED) {
-        fprintf(stderr, "%s: %m\n", filename);
+        fprintf(stderr, "%s: %m\n", bmp_file);
         fclose(fh);
         return -1;
     }
 
     /* retrieve the required information (i.e. width, height, bpp .. ) */
     if (stegmp_parse_headers(addr, stat.st_size, &bmp) >= 0) {
-        /* TODO */
+        (void) input;
+
     } else {
         fprintf(stderr, "unable to parse headers: %s\n",
                 bmp_strerror(bmp_errno));
@@ -168,13 +175,62 @@ static int stegmp(const char *filename)
     return 0;
 }
 
+static inline int stegmp_read(const char *bmp_file)
+{
+    return stegmp(bmp_file, NULL);
+}
+
+static int stegmp_write(const char *bmp_file, const char *in_file)
+{
+    if (strcmp(in_file, "-") == 0) {
+        return stegmp(bmp_file, stdin);
+    } else {
+        int ret;
+        FILE *fh = fopen(in_file, "r");
+
+        if (fh == NULL) {
+            fprintf(stderr, "%s: %m\n", in_file);
+            return -1;
+        }
+
+        ret = stegmp(bmp_file, fh);
+
+        fclose(fh);
+
+        return ret;
+    }
+}
+
+__attribute__((noreturn))
+static void usage(const char *prgnam)
+{
+    fprintf(stderr, "usage: %s COMMAND\n", prgnam);
+    fprintf(stderr, "\nCOMMAND\n");
+    fprintf(stderr, "  read  BMP\n");
+    fprintf(stderr, "  write BMP in_file\n");
+
+    exit(EX_USAGE);
+}
+
 int main(int argc, char *argv[])
 {
     /* we need a file passed as argument since we want to map it */
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s BMP\n", argv[0]);
-        return -1;
+    if (argc < 3) {
+        usage(argv[0]);
     }
 
-    return stegmp(argv[1]);
+    if (strcmp(argv[1], "read") == 0) {
+        /* read */
+
+        return stegmp_read(argv[2]);
+    } else if (strcmp(argv[1], "write") == 0) {
+        /* write */
+        if (argc < 4) {
+            usage(argv[0]);
+        }
+
+        return stegmp_write(argv[2], argv[3]);
+    } else {
+        usage(argv[0]);
+    }
 }
