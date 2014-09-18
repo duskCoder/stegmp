@@ -23,11 +23,113 @@
 
 #include <sysexits.h>
 
+#include <limits.h>
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #include "bmp.h"
+
+/*
+ * loop through every LSB of each RGB component of each pixel of the bitmap
+ * for each value, shift the retrieved bit directly in the value
+ * whenever a value is completely built, display it on the standard output
+ */
+static int stegmp_loop_read(unsigned char *baseaddr, struct bitmap *bmpp)
+{
+    unsigned char *addr = baseaddr + bmpp->data_offset;
+    unsigned char bits = 0;
+    uint8_t value;
+
+    if (bmpp->width == UINT_MAX || bmpp->height == UINT_MAX) {
+        bmp_errno = BMP_EINVALSIZ;
+        return -1;
+    }
+
+    for (uint32_t y = 0; y < bmpp->height; ++y) {
+        for (uint32_t x = 0; x < bmpp->width; ++x) {
+            for (int i = 0; i < bmpp->bpp / 8; ++i) {
+                value = (value << 1) | (*addr & 0x1);
+
+                if (++bits == 8) {
+                    fwrite(&value, 1, 1, stdout);
+                    bits = 0;
+                }
+
+                addr++;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * reads input from `fh' and write it bit by bit to the LSB of each RGB
+ * component of each pixel of the bitmap
+ */
+static
+int stegmp_loop_write(unsigned char *baseaddr, struct bitmap *bmpp, FILE *fh)
+{
+    unsigned char *addr = baseaddr + bmpp->data_offset;
+    unsigned char bits = 0;
+    uint8_t value;
+    char buffer[256];
+    size_t idx = 0;
+    size_t len;
+
+    if (bmpp->width == UINT_MAX || bmpp->height == UINT_MAX) {
+        bmp_errno = BMP_EINVALSIZ;
+        return -1;
+    }
+
+    len = fread(buffer, 1, sizeof(buffer), fh);
+
+    if (len == 0) {
+        return (ferror(fh)) ? -1 : 0;
+    }
+
+    value = buffer[idx++];
+
+    for (uint32_t y = 0; y < bmpp->height; ++y) {
+        for (uint32_t x = 0; x < bmpp->width; ++x) {
+            for (int i = 0; i < bmpp->bpp / 8; ++i) {
+
+                /* write a bit of the new value on the mapped file */
+                *addr = (*addr & 0xfe) | ((value >> (7 - bits)) & 0x1);
+
+                if (++bits == 8) {
+                    /* 8 bits of the value have been written */
+
+                    bits = 0;
+
+                    /* check if bufferized input still present */
+                    if (idx == len) {
+                        if (feof(fh)) {
+                            return 0;
+                        } else if (ferror(fh)) {
+                            return -1;
+                        }
+
+                        len = fread(buffer, 1, sizeof(buffer), fh);
+
+                        if (len == 0) {
+                            return (ferror(fh)) ? -1 : 0;
+                        }
+
+                        idx = 0;
+                    }
+
+                    value = buffer[idx++];
+                }
+                ++addr;
+            }
+        }
+    }
+
+    return 0;
+}
 
 static int stegmp_parse_windows_bitmap_info_header(const unsigned char *addr,
         size_t size, struct bitmap *bmpp)
@@ -162,7 +264,11 @@ static int stegmp(const char *bmp_file, FILE *input)
 
     /* retrieve the required information (i.e. width, height, bpp .. ) */
     if (stegmp_parse_headers(addr, stat.st_size, &bmp) >= 0) {
-        (void) input;
+        if (input) {
+            stegmp_loop_write(addr, &bmp, input);
+        } else {
+            stegmp_loop_read(addr, &bmp);
+        }
 
     } else {
         fprintf(stderr, "unable to parse headers: %s\n",
@@ -208,6 +314,8 @@ static void usage(const char *prgnam)
     fprintf(stderr, "\nCOMMAND\n");
     fprintf(stderr, "  read  BMP\n");
     fprintf(stderr, "  write BMP in_file\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "if in_file is \"-\", the standard input is used\n");
 
     exit(EX_USAGE);
 }
